@@ -1,0 +1,9 @@
+{
+  "repository": "https://github.com/StetsenkoInna/PetriObjModelPaint",
+  "sourceHead": "34116fb0f4c332851ca83f75a277ee223a286ef6",
+  "versionInSourcePom": "2.3.0",
+  "file": "PetriObjModelPaint-34116fb.jar",
+  "sha256": "F1A0A7E51A55880F8F6C7F68A21565AF014634665432CD23DBA225C472F1E3C4",
+  "origin": "Local lab6-petri/vendor/PetriObjModelPaint/petri-swing-ui/target/petri-swing-ui.jar",
+  "note": "Prebuilt local runtime bundle. Source HEAD does not by itself certify a clean source tree or reproducible binary; the exact binary is pinned by SHA256. Baseline uses ua.stetsenkoinna.petriobj classes, not the graphical UI."
+}

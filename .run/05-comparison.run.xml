@@ -1,0 +1,12 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="05 Порівняння моделей" type="Application" factoryName="Application">
+    <option name="MAIN_CLASS_NAME" value="Chapter5Comparison" />
+    <module name="cursova-b2-petri" />
+    <option name="PROGRAM_PARAMETERS" value="--effects" />
+    <option name="VM_PARAMETERS" value="-Djava.awt.headless=true" />
+    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+    <method v="2">
+      <option name="Make" enabled="true" />
+    </method>
+  </configuration>
+</component>
