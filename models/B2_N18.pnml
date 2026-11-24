@@ -1,0 +1,293 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<pnml xmlns="http://www.pnml.org/version-2009/grammar/pnml">
+  <net id="B2_NK" type="http://www.pnml.org/version-2009/grammar/ptnet">
+    <name>
+      <text>B2_NK</text>
+    </name>
+    <page id="page1">
+      <place id="p-generator-permission-0083099c">
+        <name>
+          <text>P0 Генератор</text>
+        </name>
+        <initialMarking>
+          <text>1</text>
+        </initialMarking>
+        <graphics>
+          <position x="307" y="140"/>
+        </graphics>
+      </place>
+      <place id="p-arrived-pending-deci-d76ce2fe">
+        <name>
+          <text>P1 Пара</text>
+        </name>
+        <graphics>
+          <position x="277" y="275"/>
+        </graphics>
+      </place>
+      <place id="p-primary-free-ef9ea180">
+        <name>
+          <text>P2 Перв. вільний</text>
+        </name>
+        <initialMarking>
+          <text>1</text>
+        </initialMarking>
+        <graphics>
+          <position x="826" y="125"/>
+        </graphics>
+      </place>
+      <place id="p-q-secondary-728e394a">
+        <name>
+          <text>P3 Черга</text>
+        </name>
+        <graphics>
+          <position x="800" y="210"/>
+        </graphics>
+      </place>
+      <place id="p-secondary-free-893a3ec0">
+        <name>
+          <text>P4 Втор. вільний</text>
+        </name>
+        <initialMarking>
+          <text>1</text>
+        </initialMarking>
+        <graphics>
+          <position x="1125" y="125"/>
+        </graphics>
+      </place>
+      <place id="p-q-full-6a5e4cf2">
+        <name>
+          <text>P5 Черга повн.</text>
+        </name>
+        <graphics>
+          <position x="755" y="472"/>
+        </graphics>
+      </place>
+      <place id="p-full-free-ae8f4302">
+        <name>
+          <text>P6 Повн. вільний</text>
+        </name>
+        <initialMarking>
+          <text>1</text>
+        </initialMarking>
+        <graphics>
+          <position x="1125" y="390"/>
+        </graphics>
+      </place>
+      <place id="p-completed-secondary-dd00aaed">
+        <name>
+          <text>P7 Завершено</text>
+        </name>
+        <graphics>
+          <position x="1145" y="210"/>
+        </graphics>
+      </place>
+      <place id="p-completed-full-fcade5e6">
+        <name>
+          <text>P8 Завершено</text>
+        </name>
+        <graphics>
+          <position x="1145" y="472"/>
+        </graphics>
+      </place>
+      <place id="p-q-in-dc449cfa">
+        <name>
+          <text>P9 Черга пар</text>
+        </name>
+        <graphics>
+          <position x="531" y="210"/>
+        </graphics>
+      </place>
+      <place id="p-primary-free-capacit-82745861">
+        <name>
+          <text>P10 S</text>
+        </name>
+        <initialMarking>
+          <text>19</text>
+        </initialMarking>
+        <graphics>
+          <position x="521" y="365"/>
+        </graphics>
+      </place>
+      <transition id="t-arrival-b136ae0e">
+        <name>
+          <text>T0 Вхід</text>
+        </name>
+        <toolspecific tool="PetriObjModel" version="2.3.0">
+          <timeDelay>30.0</timeDelay>
+          <delayMeanValue>30.0</delayMeanValue>
+          <distribution>exp</distribution>
+        </toolspecific>
+        <graphics>
+          <position x="112" y="275"/>
+        </graphics>
+      </transition>
+      <transition id="t-primary-refusal-a3862ce4">
+        <name>
+          <text>T2 Відмова</text>
+        </name>
+        <toolspecific tool="PetriObjModel" version="2.3.0">
+          <priority>1</priority>
+        </toolspecific>
+        <graphics>
+          <position x="600" y="472"/>
+        </graphics>
+      </transition>
+      <transition id="t-secondary-2475a8a7">
+        <name>
+          <text>T3 Втор.</text>
+        </name>
+        <toolspecific tool="PetriObjModel" version="2.3.0">
+          <timeDelay>30.0</timeDelay>
+          <delayMeanValue>30.0</delayMeanValue>
+          <distribution>exp</distribution>
+        </toolspecific>
+        <graphics>
+          <position x="975" y="210"/>
+        </graphics>
+      </transition>
+      <transition id="t-full-ead2e143">
+        <name>
+          <text>T4 Повн.</text>
+        </name>
+        <toolspecific tool="PetriObjModel" version="2.3.0">
+          <timeDelay>100.0</timeDelay>
+          <delayMeanValue>100.0</delayMeanValue>
+          <distribution>exp</distribution>
+        </toolspecific>
+        <graphics>
+          <position x="975" y="472"/>
+        </graphics>
+      </transition>
+      <transition id="t-enqueue-1b5ee191">
+        <name>
+          <text>T5 Приймання</text>
+        </name>
+        <toolspecific tool="PetriObjModel" version="2.3.0">
+          <priority>2</priority>
+        </toolspecific>
+        <graphics>
+          <position x="393" y="210"/>
+        </graphics>
+      </transition>
+      <transition id="t-primary-ff5b2a84">
+        <name>
+          <text>T6 Перв.</text>
+        </name>
+        <toolspecific tool="PetriObjModel" version="2.3.0">
+          <timeDelay>30.0</timeDelay>
+          <delayMeanValue>30.0</delayMeanValue>
+          <priority>3</priority>
+          <distribution>exp</distribution>
+        </toolspecific>
+        <graphics>
+          <position x="656" y="210"/>
+        </graphics>
+      </transition>
+      <arc id="arc-0369854c" source="p-generator-permission-0083099c" target="t-arrival-b136ae0e">
+        <inscription>
+          <text>1</text>
+        </inscription>
+      </arc>
+      <arc id="arc-4953a620" source="p-arrived-pending-deci-d76ce2fe" target="t-primary-refusal-a3862ce4">
+        <inscription>
+          <text>2</text>
+        </inscription>
+      </arc>
+      <arc id="arc-9f9fc225" source="p-q-secondary-728e394a" target="t-secondary-2475a8a7">
+        <inscription>
+          <text>2</text>
+        </inscription>
+      </arc>
+      <arc id="arc-8de55bd5" source="p-secondary-free-893a3ec0" target="t-secondary-2475a8a7">
+        <inscription>
+          <text>1</text>
+        </inscription>
+      </arc>
+      <arc id="arc-707b756a" source="p-q-full-6a5e4cf2" target="t-full-ead2e143">
+        <inscription>
+          <text>1</text>
+        </inscription>
+      </arc>
+      <arc id="arc-c3985c7c" source="p-full-free-ae8f4302" target="t-full-ead2e143">
+        <inscription>
+          <text>1</text>
+        </inscription>
+      </arc>
+      <arc id="arc-bd6cae69" source="p-arrived-pending-deci-d76ce2fe" target="t-enqueue-1b5ee191">
+        <inscription>
+          <text>2</text>
+        </inscription>
+      </arc>
+      <arc id="arc-0131bb16" source="p-primary-free-capacit-82745861" target="t-enqueue-1b5ee191">
+        <inscription>
+          <text>1</text>
+        </inscription>
+      </arc>
+      <arc id="arc-e0353208" source="p-q-in-dc449cfa" target="t-primary-ff5b2a84">
+        <inscription>
+          <text>1</text>
+        </inscription>
+      </arc>
+      <arc id="arc-6e672a68" source="p-primary-free-ef9ea180" target="t-primary-ff5b2a84">
+        <inscription>
+          <text>1</text>
+        </inscription>
+      </arc>
+      <arc id="arc-30e43473" source="t-arrival-b136ae0e" target="p-generator-permission-0083099c">
+        <inscription>
+          <text>1</text>
+        </inscription>
+      </arc>
+      <arc id="arc-ca805029" source="t-arrival-b136ae0e" target="p-arrived-pending-deci-d76ce2fe">
+        <inscription>
+          <text>2</text>
+        </inscription>
+      </arc>
+      <arc id="arc-36c49f11" source="t-primary-refusal-a3862ce4" target="p-q-full-6a5e4cf2">
+        <inscription>
+          <text>2</text>
+        </inscription>
+      </arc>
+      <arc id="arc-a1219048" source="t-secondary-2475a8a7" target="p-secondary-free-893a3ec0">
+        <inscription>
+          <text>1</text>
+        </inscription>
+      </arc>
+      <arc id="arc-c3f635f1" source="t-secondary-2475a8a7" target="p-completed-secondary-dd00aaed">
+        <inscription>
+          <text>2</text>
+        </inscription>
+      </arc>
+      <arc id="arc-2e8a0e58" source="t-full-ead2e143" target="p-full-free-ae8f4302">
+        <inscription>
+          <text>1</text>
+        </inscription>
+      </arc>
+      <arc id="arc-366573aa" source="t-full-ead2e143" target="p-completed-full-fcade5e6">
+        <inscription>
+          <text>1</text>
+        </inscription>
+      </arc>
+      <arc id="arc-0de0f88b" source="t-enqueue-1b5ee191" target="p-q-in-dc449cfa">
+        <inscription>
+          <text>1</text>
+        </inscription>
+      </arc>
+      <arc id="arc-e0a627bd" source="t-primary-ff5b2a84" target="p-primary-free-ef9ea180">
+        <inscription>
+          <text>1</text>
+        </inscription>
+      </arc>
+      <arc id="arc-3f000fc2" source="t-primary-ff5b2a84" target="p-primary-free-capacit-82745861">
+        <inscription>
+          <text>1</text>
+        </inscription>
+      </arc>
+      <arc id="arc-b030ea1f" source="t-primary-ff5b2a84" target="p-q-secondary-728e394a">
+        <inscription>
+          <text>2</text>
+        </inscription>
+      </arc>
+    </page>
+  </net>
+</pnml>

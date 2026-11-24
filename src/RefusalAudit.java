@@ -56,17 +56,12 @@ public final class RefusalAudit {
     }
 
     private static Map<String, Object> interval(double[] arrivals, double[] refused) {
-        double totalArrivals = StatUtils.sum(arrivals);
-        double estimate = StatUtils.sum(refused) / totalArrivals;
-        double meanArrivals = totalArrivals / arrivals.length;
-        double[] residuals = new double[arrivals.length];
-        for (int index = 0; index < arrivals.length; index++) {
-            residuals[index] = refused[index] - estimate * arrivals[index];
-        }
-        double standardError = Math.sqrt(StatUtils.variance(residuals) / arrivals.length)
-            / meanArrivals;
-        double halfWidth = new TDistribution(arrivals.length - 1)
-            .inverseCumulativeProbability(.975) * standardError;
+        double[] rates = new double[arrivals.length];
+        for (int i = 0; i < rates.length; i++) rates[i] = refused[i] / arrivals[i];
+        double estimate = StatUtils.mean(rates);
+        double standardError = Math.sqrt(StatUtils.variance(rates) / rates.length);
+        double halfWidth = new TDistribution(rates.length - 1)
+                .inverseCumulativeProbability(.975) * standardError;
         return Map.of("n", arrivals.length, "estimate", estimate,
             "standardError", standardError, "halfWidth", halfWidth,
             "low", estimate - halfWidth, "high", estimate + halfWidth,

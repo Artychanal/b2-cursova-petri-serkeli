@@ -1,123 +1,198 @@
 import java.nio.file.*;
 import java.util.*;
-import java.nio.charset.StandardCharsets;
-import org.apache.commons.math3.distribution.TDistribution;
 
 /** Порівняння варіантів ділянки. */
 public final class Chapter5Comparison {
+    private static final double HORIZON = 1_000_000;
+    private static final int PILOT_RUNS = 20;
+    private static final int MIN_MAIN_RUNS = 40;
+    private static final Path OUTPUT = Path.of("output/comparison/chapter5");
+    private static final Path DATA = Path.of("data/comparison/chapter5");
+    private static final String[] VARIANTS = {"baseline", "buffered"};
+    private static final String[] TARGETS = {"pRefusal", "L_full", "throughput"};
     private static final String[] METRICS = {
         "L_full", "L_secondary", "L_in", "U_primary", "U_secondary", "U_full", "throughput", "Q_full_end"
     };
+    private static final String HEADER = "variant,K,replication,seed,T_min,warmup_min,arrived_pairs,refused_pairs,"
+            + String.join(",", METRICS);
+    private static final List<String> COLUMNS = List.of(HEADER.split(","));
+
+    private record Plan(int runs, Map<String, Map<String, Double>> epsilon, List<Object> targets) { }
+
+    private Chapter5Comparison() { }
 
     public static void main(String[] args) throws Exception {
-        Path output = Path.of("output/comparison/chapter5/H1000000_R40");
-        if (args.length == 1 && args[0].equals("--effects")) {
-            printEffects(Path.of("data/comparison/chapter5/H1000000_R40/replications.csv"));
+        Files.createDirectories(OUTPUT);
+        if (args.length > 0 && args[0].equals("--effects")) {
+            var pilot = read(DATA.resolve("pilot.csv"));
+            var plan = plan(pilot);
+            summarize(read(Path.of(args.length > 1 ? args[1] : DATA.resolve("replications.csv").toString())), plan);
             return;
         }
-        Files.createDirectories(output);
-        double horizon = 1_000_000;
-        int n = 40;
-        var records = new ArrayList<Object>();
-        var reports = new ArrayList<Object>();
-        var csv = new StringBuilder("variant,K,replication,seed,T_min,warmup_min,arrived_pairs,refused_pairs,L_full,L_secondary,L_in,U_primary,U_secondary,U_full,throughput,Q_full_end\n");
-        for (int k:new int[]{
-                -1, 18
-        }) {
-            var values = new LinkedHashMap<String, double[]>();
-            for (String metric:METRICS){
-                values.put(metric, new double[n]);
-            }
-            double[] arrivals = new double[n], refusals = new double[n];
-            long seedBase = k<0?600000000L:600100000L;
-            for (int r = 0;r<n;r++) {
-                long seed = seedBase+r;
-                var config = ModelConfig.baseline(horizon, seed, 0);
-                var delays = DelaySource.seeded(seed);
-                var net = k<0?B2NetFactory.baseline(config, delays):B2NetFactory.buffered(config, delays, k);
-                var result = new SimulationRunner(net, config).run(null);
-                var row = result.summary();
-                records.add(row);
-                arrivals[r] = result.arrivedPairsInWindow();
-                refusals[r] = result.refusedPairsInWindow();
-                csv.append(k<0?"baseline":"buffered").append(',').append(Math.max(0, k)).append(',').append(r).append(',').append(seed)
-                    .append(',').append(horizon).append(',').append(0).append(',').append((long)arrivals[r]).append(',').append((long)refusals[r]);
-                for (String metric:METRICS) {
-                    double value = ((Number)row.get(metric)).doubleValue();
-                    values.get(metric)[r] = value;
-                    csv.append(',').append(value);
+        var pilot = new ArrayList<String[]>();
+        for (String variant : VARIANTS) {
+            long seedBase = variant.equals("baseline") ? 1_800_000_000L : 1_800_100_000L;
+            for (int r = 0; r < PILOT_RUNS; r++) pilot.add(simulate(variant, r, seedBase + r));
+        }
+        write(OUTPUT.resolve("pilot.csv"), pilot);
+        var plan = plan(pilot);
+        Json.write(OUTPUT.resolve("plan.json"), Map.of(
+                "kind", "finite_horizon_comparison_with_pilot", "horizon", HORIZON,
+                "warmup", 0, "beta", .95, "pilotRunsPerVariant", PILOT_RUNS,
+                "mainRunsPerVariant", plan.runs(), "targets", plan.targets(),
+                "notes", List.of("Precision tolerances follow the pilot-based rules",
+                    "Pilot and comparison samples use disjoint seed ranges",
+                    "Pilot observations are excluded from the main sample",
+                    "Other reported metrics are descriptive; no precision target is claimed for them"),
+                "provenance", RunProvenance.collect()));
+
+        // Збережені результати моделювання.
+        var historical = read(DATA.resolve("H1000000_R40/replications.csv"));
+        var main = new ArrayList<String[]>();
+        int reused = 0;
+        for (String variant : VARIANTS) {
+            var saved = group(historical, variant);
+            requireSequence(saved, variant, MIN_MAIN_RUNS, false);
+            long seedBase = mainSeed(variant);
+            for (int r = 0; r < plan.runs(); r++) {
+                if (r < saved.size()) {
+                    main.add(saved.get(r));
+                    reused++;
+                } else {
+                    main.add(simulate(variant, r, seedBase + r));
                 }
-                csv.append('\n');
             }
-            var estimates = new ArrayList<Object>();
-            estimates.add(ExperimentStatistics.refusal(arrivals, refusals).json());
-            for (String metric:METRICS){
-                estimates.add(ExperimentStatistics.meanEstimate(metric, values.get(metric)).json());
-            }
-            reports.add(Map.of("variant", k<0?"baseline":"buffered", "K", Math.max(0, k), "n", n, "T_min", horizon,
-                "warmup_min", 0, "seedBase", seedBase, "lastSeed", seedBase+n-1, "estimates", estimates));
-            System.out.println("Chapter 5 comparison "+(k<0?"N0":"K="+k)+": "+n+" runs complete");
         }
-        Files.writeString(output.resolve("replications.csv"), csv.toString(), StandardCharsets.UTF_8);
-        Json.write(output.resolve("runs.json"), records);
-        Json.write(output.resolve("summary.json"), Map.of("kind", "independent_finite_horizon_comparison", "cases", reports,
-            "provenance", RunProvenance.collect(), "notes", List.of("Both variants start empty, T=1000000 min, no burn-in",
-            "Means are finite-horizon responses, not stationary means for N0",
-            "This trial comparison does not replace the precision plan or main series",
-            "Variants use disjoint seed ranges, no common-random-number pairing")));
+        write(OUTPUT.resolve("replications.csv"), main);
+        summarize(main, plan);
+        System.out.println("Comparison: " + plan.runs() + " runs per variant; " + reused
+                + " saved observations; " + pilot.size() + " separate pilot runs");
     }
 
-    private static void printEffects(Path csv) throws Exception {
-        var rows = Files.readAllLines(csv, StandardCharsets.UTF_8);
-        var columns = Arrays.asList(rows.getFirst().split(","));
-        var groups = new HashMap<String, List<String[]>>();
-        var seeds = new HashSet<String>();
-        for (String line : rows.subList(1, rows.size())) {
-            String[] row = line.split(",");
-            String variant = row[columns.indexOf("variant")];
-            if (!seeds.add(row[columns.indexOf("seed")])
-                    || Double.parseDouble(row[columns.indexOf("T_min")]) != 1_000_000
-                    || Double.parseDouble(row[columns.indexOf("warmup_min")]) != 0) {
-                throw new IllegalArgumentException("Expected independent runs on the common horizon");
+    private static Plan plan(List<String[]> pilot) {
+        int runs = MIN_MAIN_RUNS;
+        var tolerances = new LinkedHashMap<String, Map<String, Double>>();
+        var targets = new ArrayList<Object>();
+        for (String variant : VARIANTS) {
+            var sample = group(pilot, variant);
+            requireSequence(sample, variant, PILOT_RUNS, true);
+            var epsilon = new LinkedHashMap<String, Double>();
+            for (String metric : TARGETS) {
+                double[] values = values(sample, metric);
+                double tolerance = ExperimentStatistics.epsilon(metric, ExperimentStatistics.mean(values));
+                var estimate = ExperimentStatistics.meanEstimate(metric, values, tolerance);
+                runs = Math.max(runs, Math.toIntExact(estimate.chebyshevN()));
+                epsilon.put(metric, tolerance);
+                targets.add(Map.of("variant", variant, "metric", metric,
+                        "pilotMean", estimate.estimate(), "pilotSd", estimate.sd(),
+                        "epsilon", tolerance, "requiredN", estimate.chebyshevN()));
             }
-            groups.computeIfAbsent(variant, key -> new ArrayList<>()).add(row);
+            tolerances.put(variant, epsilon);
         }
-        var baseline = groups.getOrDefault("baseline", List.of());
-        var buffered = groups.getOrDefault("buffered", List.of());
-        if (baseline.size() != 40 || buffered.size() != 40 || groups.size() != 2) {
-            throw new IllegalArgumentException("Expected 40 runs per variant");
+        if (runs > 10_000) throw new IllegalStateException("Review the comparison precision plan");
+        return new Plan(runs, tolerances, targets);
+    }
+
+    private static String[] simulate(String variant, int replication, long seed) throws Exception {
+        var config = ModelConfig.baseline(HORIZON, seed, 0);
+        var delays = DelaySource.seeded(seed);
+        boolean buffered = variant.equals("buffered");
+        var net = buffered ? B2NetFactory.buffered(config, delays, 18) : B2NetFactory.baseline(config, delays);
+        var result = new SimulationRunner(net, config).run(null);
+        var summary = result.summary();
+        var row = new ArrayList<String>(List.of(variant, buffered ? "18" : "0",
+                Integer.toString(replication), Long.toString(seed), Double.toString(HORIZON), "0",
+                Long.toString(result.arrivedPairsInWindow()), Long.toString(result.refusedPairsInWindow())));
+        for (String metric : METRICS) row.add(summary.get(metric).toString());
+        return row.toArray(String[]::new);
+    }
+
+    private static void summarize(List<String[]> rows, Plan plan) throws Exception {
+        var estimates = new LinkedHashMap<String, Object>();
+        var byVariant = new LinkedHashMap<String, Map<String, ExperimentStatistics.Estimate>>();
+        for (String variant : VARIANTS) {
+            var sample = group(rows, variant);
+            requireSequence(sample, variant, plan.runs(), false);
+            var results = new LinkedHashMap<String, ExperimentStatistics.Estimate>();
+            var json = new LinkedHashMap<String, Object>();
+            for (String metric : allMetrics()) {
+                double[] values = values(sample, metric);
+                Double fixed = plan.epsilon().get(variant).get(metric);
+                var estimate = fixed == null ? ExperimentStatistics.meanEstimate(metric, values)
+                        : ExperimentStatistics.meanEstimate(metric, values, fixed);
+                if (fixed != null && estimate.halfWidth() > fixed) {
+                    throw new IllegalStateException("Comparison precision not achieved: " + variant + " " + metric);
+                }
+                results.put(metric, estimate);
+                json.put(metric, estimate.json());
+            }
+            byVariant.put(variant, results);
+            estimates.put(variant, json);
         }
-        System.out.println("metric,buffered_minus_baseline,lower95,upper95,df");
-        printDifference(refusal(columns, baseline), refusal(columns, buffered), 100);
-        for (String metric : List.of("L_full", "L_secondary")) {
-            printDifference(
-                ExperimentStatistics.meanEstimate(metric, values(columns, baseline, metric)),
-                ExperimentStatistics.meanEstimate(metric, values(columns, buffered, metric)),
-                1);
+        if (rows.size() != 2 * plan.runs()) throw new IllegalArgumentException("Unexpected comparison rows");
+        Json.write(OUTPUT.resolve("summary-from-saved.json"), estimates);
+        System.out.println("metric,buffered_minus_baseline");
+        for (String metric : List.of("pRefusal", "L_full", "L_secondary", "throughput")) {
+            double delta = byVariant.get("buffered").get(metric).estimate()
+                    - byVariant.get("baseline").get(metric).estimate();
+            double scale = metric.equals("pRefusal") ? 100 : metric.equals("throughput") ? 60 : 1;
+            System.out.printf(Locale.ROOT, "%s,%.9f%n", metric, delta * scale);
         }
     }
 
-    private static double[] values(List<String> columns, List<String[]> rows, String metric) {
-        int index = columns.indexOf(metric);
+    private static List<String> allMetrics() {
+        var metrics = new ArrayList<String>(List.of("pRefusal"));
+        metrics.addAll(List.of(METRICS));
+        return metrics;
+    }
+
+    private static long mainSeed(String variant) {
+        return variant.equals("baseline") ? 600_000_000L : 600_100_000L;
+    }
+
+    private static void requireSequence(List<String[]> rows, String variant, int count, boolean pilot) {
+        if (rows.size() != count) throw new IllegalArgumentException("Unexpected number of runs: " + variant);
+        long seedBase = pilot ? (variant.equals("baseline") ? 1_800_000_000L : 1_800_100_000L) : mainSeed(variant);
+        for (int r = 0; r < rows.size(); r++) {
+            String[] row = rows.get(r);
+            if (row.length != COLUMNS.size() || Integer.parseInt(row[2]) != r
+                    || Long.parseLong(row[3]) != seedBase + r || Double.parseDouble(row[4]) != HORIZON
+                    || Double.parseDouble(row[5]) != 0
+                    || Integer.parseInt(row[1]) != (variant.equals("baseline") ? 0 : 18)) {
+                throw new IllegalArgumentException("Unexpected comparison configuration");
+            }
+            for (int i = 6; i < row.length; i++) {
+                double value = Double.parseDouble(row[i]);
+                if (!Double.isFinite(value) || value < 0) throw new IllegalArgumentException("Invalid observation");
+            }
+        }
+    }
+
+    private static List<String[]> group(List<String[]> rows, String variant) {
+        return rows.stream().filter(row -> row[0].equals(variant)).toList();
+    }
+
+    private static double[] values(List<String[]> rows, String metric) {
+        if (metric.equals("pRefusal")) {
+            return rows.stream().mapToDouble(row -> {
+                double arrivals = Double.parseDouble(row[6]), refused = Double.parseDouble(row[7]);
+                if (arrivals <= 0 || refused > arrivals) throw new IllegalArgumentException("Invalid counters");
+                return refused / arrivals;
+            }).toArray();
+        }
+        int index = COLUMNS.indexOf(metric);
         return rows.stream().mapToDouble(row -> Double.parseDouble(row[index])).toArray();
     }
 
-    private static ExperimentStatistics.Estimate refusal(List<String> columns, List<String[]> rows) {
-        return ExperimentStatistics.refusal(values(columns, rows, "arrived_pairs"),
-            values(columns, rows, "refused_pairs"));
+    private static List<String[]> read(Path path) throws Exception {
+        var lines = Files.readAllLines(path);
+        if (!lines.getFirst().equals(HEADER)) throw new IllegalArgumentException("Unexpected CSV header");
+        return lines.subList(1, lines.size()).stream().map(line -> line.split(",")).toList();
     }
 
-    private static void printDifference(ExperimentStatistics.Estimate baseline,
-        ExperimentStatistics.Estimate buffered, double scale) {
-        double delta = scale * (buffered.estimate() - baseline.estimate());
-        double v0 = baseline.sd() * baseline.sd() / baseline.n();
-        double v18 = buffered.sd() * buffered.sd() / buffered.n();
-        double variance = v0 + v18;
-        double df = variance * variance
-        / (v0 * v0 / (baseline.n() - 1) + v18 * v18 / (buffered.n() - 1));
-        double halfWidth = scale * Math.sqrt(variance) * new TDistribution(df)
-            .inverseCumulativeProbability((1 + ExperimentStatistics.BETA) / 2);
-        System.out.printf(Locale.ROOT, "%s,%.9f,%.9f,%.9f,%.5f%n",
-            baseline.metric(), delta, delta - halfWidth, delta + halfWidth, df);
+    private static void write(Path path, List<String[]> rows) throws Exception {
+        var csv = new StringBuilder(HEADER).append('\n');
+        for (String[] row : rows) csv.append(String.join(",", row)).append('\n');
+        Files.writeString(path, csv);
     }
 }

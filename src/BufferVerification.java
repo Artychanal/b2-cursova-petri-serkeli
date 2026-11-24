@@ -166,12 +166,12 @@ public final class BufferVerification {
         expect("B08", "Chebyshev_n_for_sd1_epsilon_half_beta095", 80, mean.chebyshevN());
         condition("B08", "Student_interval_uses_t_not_normal", mean.halfWidth()>2.48 && mean.halfWidth()<2.49);
         var ratio = ExperimentStatistics.refusal(new double[]{
-                10, 10, 10
+                10, 20, 30
         }, new double[]{
-                1, 2, 3
+                1, 4, 9
         });
-        expect("B08", "ratio_of_mean_counts", 0.2, ratio.estimate());
-        expect("B08", "ratio_influence_sd", 0.1, ratio.sd());
+        expect("B08", "mean_of_run_refusals", 0.2, ratio.estimate());
+        expect("B08", "run_refusal_sd", 0.1, ratio.sd());
         Json.write(output.resolve("buffer-verification.json"), Map.of("checks", checks, "scenarios", scenarios));
         var csv = new StringBuilder("scenario,quantity,expected,actual,passed\n");
         for (var row : checks) {

@@ -27,7 +27,8 @@ public final class SimulationRunner {
     public record Result(ModelConfig config, long[] starts, long[] ends, long[] windowEnds,
         int[] marks, int[] buffers, double[] placeAreas, double[] bufferAreas,
         int fullQueueMax, long invariantChecks, Map<String, Object> delaySource,
-        int capacity, int[] placeMaxima, List<Snapshot> trajectory) {
+        int capacity, int primaryTransition, String variant,
+        int[] placeMaxima, List<Snapshot> trajectory) {
 
         public double duration() {
             return config.horizon()-config.warmup();
@@ -67,7 +68,7 @@ public final class SimulationRunner {
             summary.put("I", starts);
             summary.put("O", ends);
             summary.put("windowO", windowEnds);
-            summary.put("variant", variantName());
+            summary.put("variant", variant);
             summary.put("K", capacity);
             summary.put("delaySource", delaySource);
             summary.put("finalM", marks);
@@ -80,7 +81,7 @@ public final class SimulationRunner {
             summary.put("Q_full_max", fullQueueMax);
             summary.put("L_secondary", placeAreas[B2NetFactory.P3_SECONDARY_QUEUE]/duration());
             summary.put("N_full_stage", (placeAreas[B2NetFactory.P5_FULL_QUEUE]+bufferAreas[B2NetFactory.T4_FULL])/duration());
-            summary.put("U_primary", (bufferAreas.length == 7 ? bufferAreas[B2NetFactory.T6_PRIMARY_BUFFERED] : bufferAreas[B2NetFactory.T1_PRIMARY_DIRECT])/duration());
+            summary.put("U_primary", bufferAreas[primaryTransition]/duration());
             summary.put("L_in", marks.length > 9 ? placeAreas[B2NetFactory.P9_INPUT_QUEUE]/duration() : 0);
             summary.put("Q_in_max", marks.length > 9 ? placeMaxima[B2NetFactory.P9_INPUT_QUEUE] : 0);
             summary.put("Q_secondary_max", placeMaxima[B2NetFactory.P3_SECONDARY_QUEUE]);
@@ -99,62 +100,36 @@ public final class SimulationRunner {
             return List.of("T0", "T1_absent", "T2", "T3", "T4", "T5", "T6");
         }
 
-        private String variantName() {
-            if (marks.length == 9) {
-                return "baseline";
-            }
-            return "buffered";
-        }
+
     }
     private final ModelConfig config;
     private final PetriNet net;
-    private final PetriSim simulator;
+    private final PetriSimulation simulation;
+    private final B2NetFactory.Layout layout;
     private final long[] starts, ends, windowEnds;
-    private final double[] placeAreas, bufferAreas;
-    private final int capacity;
-    private final int[] placeMaxima;
-    private final List<Snapshot> trajectory = new ArrayList<>();
-    private double sampleEvery;
-    private long sampleIndex;
-    private double lastAccountingTime;
+    private final int capacity, refusalPlace, totalCapacity;
     private long invariantChecks;
-    private int fullQueueMax;
     private BufferedWriter trace;
-    private boolean used;
 
     public SimulationRunner(PetriNet net, ModelConfig config) {
         this.net = net;
         this.config = config;
-        int placeCount = net.getListP().length;
-        int transitionCount = net.getListT().length;
-        boolean buffered = placeCount == 11 && transitionCount == 6;
-        if (!(buffered || (placeCount == 9 && transitionCount == 5))) {
-            throw new IllegalArgumentException("Expected N0 or N_K");
-        }
-        // Формальні номери переходів.
-        int counterCount = buffered ? 7 : 5;
-        starts = new long[counterCount];
-        ends = new long[counterCount];
-        windowEnds = new long[counterCount];
-        placeAreas = new double[placeCount];
-        bufferAreas = new double[counterCount];
-        placeMaxima = new int[placeCount];
-        if (buffered) {
-            capacity = net.getListP()[B2NetFactory.P10_FREE_CAPACITY].getMark() - 1;
-        } else {
-            capacity = 0;
-        }
-        simulator = new PetriSim(net);
-        simulator.setFiringListener(this::onPhase);
+        layout = B2NetFactory.layout(net);
+        capacity = layout.capacity();
+        boolean buffered = layout.primaryTransition() == B2NetFactory.T6_PRIMARY_BUFFERED;
+        refusalPlace = buffered ? B2NetFactory.P10_FREE_CAPACITY : B2NetFactory.P2_PRIMARY_FREE;
+        totalCapacity = buffered ? capacity + 1 : 0;
+        starts = new long[layout.counterCount()];
+        ends = new long[starts.length];
+        windowEnds = new long[starts.length];
+        simulation = new PetriSimulation(net, config.horizon(), config.warmup());
     }
-    // Стан елементів мережі.
-
     private int mark(int place) {
         return place < net.getListP().length ? net.getListP()[place].getMark() : 0;
     }
 
     private int active(int transition) {
-        int index = B2NetFactory.denseIndex(net, transition);
+        int index = layout.indexOf(transition);
         return index >= 0 ? net.getListT()[index].getBuffer() : 0;
     }
 
@@ -167,7 +142,7 @@ public final class SimulationRunner {
     }
 
     private void onPhase(FiringPhase phase, PetriT transition, double time) {
-        int transitionId = B2NetFactory.logicalId(net, transition.getNumber());
+        int transitionId = layout.transitionIds()[transition.getNumber()];
         if (phase == FiringPhase.BEFORE_ACT_IN) {
             checkBeforeInput(transitionId);
         }
@@ -193,7 +168,7 @@ public final class SimulationRunner {
             require(mark(B2NetFactory.P9_INPUT_QUEUE) == 0, "new pair bypassed waiting FIFO pair");
         }
         if (transitionId == B2NetFactory.T2_REFUSAL) {
-            boolean refusalAllowed = starts.length == 5 ? mark(B2NetFactory.P2_PRIMARY_FREE) == 0 : mark(B2NetFactory.P10_FREE_CAPACITY) == 0;
+            boolean refusalAllowed = mark(refusalPlace) == 0;
             require(refusalAllowed, "premature refusal");
         }
         if (starts[transitionId] > 10_000_000) {
@@ -251,7 +226,6 @@ public final class SimulationRunner {
     }
 
     private void checkCapacityBalance() {
-        int totalCapacity = starts.length == 5 ? 0 : capacity + 1;
         require(mark(B2NetFactory.P10_FREE_CAPACITY) + mark(B2NetFactory.P9_INPUT_QUEUE) + active(B2NetFactory.T5_ENQUEUE) + active(B2NetFactory.T6_PRIMARY_BUFFERED) == totalCapacity,
                 "buffer capacity");
     }
@@ -275,7 +249,7 @@ public final class SimulationRunner {
         require(mark(B2NetFactory.P1_ARRIVAL_PENDING) % 2 == 0 && mark(B2NetFactory.P3_SECONDARY_QUEUE) % 2 == 0 && mark(B2NetFactory.P7_SECONDARY_DONE) % 2 == 0, "pair parity");
     }
 
-    private void recordSettledState(double time) {
+    private void recordSettledState() {
         checkInvariants();
         require(mark(B2NetFactory.P1_ARRIVAL_PENDING) == 0 && active(B2NetFactory.T2_REFUSAL) == 0 && active(B2NetFactory.T5_ENQUEUE) == 0, "pending immediate decision");
         require(!(mark(B2NetFactory.P9_INPUT_QUEUE)>0 && mark(B2NetFactory.P2_PRIMARY_FREE)>0), "buffered pair left idle");
@@ -284,62 +258,6 @@ public final class SimulationRunner {
         }
         require(!(mark(B2NetFactory.P3_SECONDARY_QUEUE) >= 2 && mark(B2NetFactory.P4_SECONDARY_FREE)>0), "secondary work left idle");
         require(!(mark(B2NetFactory.P5_FULL_QUEUE)>0 && mark(B2NetFactory.P6_FULL_FREE)>0), "full work left idle");
-        if (time >= config.warmup()) {
-            updateMaxima();
-        }
-        if (sampleEvery > 0 && sampleIndex*sampleEvery == time) {
-            sampleTrajectory(time);
-        }
-    }
-
-    private void updateMaxima() {
-        for (int j = 0; j < placeMaxima.length; j++) {
-            placeMaxima[j] = Math.max(placeMaxima[j], mark(j));
-        }
-        fullQueueMax = placeMaxima[B2NetFactory.P5_FULL_QUEUE];
-    }
-
-    private void sampleTrajectory(double time) {
-        int[] marks = new int[placeAreas.length], buffers = new int[bufferAreas.length];
-        for (int j = 0; j < marks.length; j++) {
-            marks[j] = mark(j);
-        }
-        for (int j = 0; j < buffers.length; j++) {
-            buffers[j] = active(j);
-        }
-        double[] sampledPlaces = placeAreas.clone(), sampledBuffers = bufferAreas.clone();
-        double tail = Math.max(0, time-Math.max(lastAccountingTime, config.warmup()));
-        for (int j = 0; j < marks.length; j++) {
-            sampledPlaces[j] += marks[j]*tail;
-        }
-        for (int j = 0; j < buffers.length; j++) {
-            sampledBuffers[j] += buffers[j]*tail;
-        }
-        trajectory.add(new Snapshot(time, marks, buffers, sampledPlaces, sampledBuffers, ends.clone()));
-        sampleIndex++;
-        if (trajectory.size() > 1_000_000) {
-            throw new IllegalArgumentException("Too many trajectory samples");
-        }
-    }
-
-    private void integrate(double from, double to) {
-        while (sampleEvery > 0 && sampleIndex*sampleEvery < to) {
-            sampleTrajectory(sampleIndex*sampleEvery);
-        }
-        double windowStart = Math.max(from, config.warmup());
-        double windowEnd = Math.min(to, config.horizon());
-        double dt = Math.max(0, windowEnd - windowStart);
-        lastAccountingTime = to;
-        if (dt == 0) {
-            return;
-        }
-        for (int j = 0; j < placeAreas.length; j++) {
-            placeAreas[j] += mark(j)*dt;
-        }
-        for (int j = 0; j < bufferAreas.length; j++) {
-            bufferAreas[j] += active(j)*dt;
-        }
-        updateMaxima();
     }
 
     public Result run(Path tracePath) throws IOException {
@@ -347,20 +265,25 @@ public final class SimulationRunner {
     }
 
     public Result run(Path tracePath, double sampleInterval) throws IOException {
-        if (!Double.isFinite(sampleInterval) || sampleInterval < 0) {
-            throw new IllegalArgumentException("Invalid sample interval");
+        if (tracePath != null) {
+            Files.createDirectories(tracePath.toAbsolutePath().getParent());
+            trace = Files.newBufferedWriter(tracePath, StandardCharsets.UTF_8);
         }
-        sampleEvery = sampleInterval;
-        if (used) {
-            throw new IllegalStateException("Create a fresh runner/net for each run");
-        }
-        used = true;
-        openTrace(tracePath);
         try {
             writeTraceHeader();
-            initializeSimulation();
-            processEvents();
-            return createResult();
+            checkInvariants();
+            var result = simulation.run(sampleInterval, this::onPhase, this::recordSettledState);
+            checkInvariants();
+            var trajectory = new ArrayList<Snapshot>();
+            for (var point : result.trajectory()) {
+                trajectory.add(new Snapshot(point.time(), point.marks(), expand(point.buffers()),
+                        point.placeAreas(), expand(point.bufferAreas()), expand(point.ends())));
+            }
+            return new Result(config, starts.clone(), ends.clone(), windowEnds.clone(),
+                    result.marks(), expand(result.buffers()), result.placeAreas(),
+                    expand(result.bufferAreas()), result.placeMaxima()[B2NetFactory.P5_FULL_QUEUE],
+                    invariantChecks, B2NetFactory.delayDescription(net), capacity,
+                    layout.primaryTransition(), layout.variant(), result.placeMaxima(), List.copyOf(trajectory));
         } finally {
             if (trace != null) {
                 trace.close();
@@ -369,90 +292,35 @@ public final class SimulationRunner {
         }
     }
 
-    private void openTrace(Path tracePath) throws IOException {
-        if (tracePath != null) {
-            Files.createDirectories(tracePath.toAbsolutePath().getParent());
-            trace = Files.newBufferedWriter(tracePath, StandardCharsets.UTF_8);
-        }
+    private double[] expand(double[] values) {
+        double[] result = new double[starts.length];
+        for (int i = 0; i < values.length; i++) result[layout.transitionIds()[i]] = values[i];
+        return result;
+    }
+
+    private int[] expand(int[] values) {
+        int[] result = new int[starts.length];
+        for (int i = 0; i < values.length; i++) result[layout.transitionIds()[i]] = values[i];
+        return result;
+    }
+
+    private long[] expand(long[] values) {
+        long[] result = new long[starts.length];
+        for (int i = 0; i < values.length; i++) result[layout.transitionIds()[i]] = values[i];
+        return result;
     }
 
     private void writeTraceHeader() throws IOException {
-        if (trace == null) {
-            return;
-        }
+        if (trace == null) return;
         trace.write("time_min,transition,phase");
-        for (String group : new String[]{
-                "P", "B", "I", "O"
-        }) {
-            int count = group.equals("P") ? placeAreas.length : bufferAreas.length;
-            for (int index = 0; index < count; index++) {
-                trace.write("," + group + index);
-            }
+        for (String group : new String[]{"P", "B", "I", "O"}) {
+            int count = group.equals("P") ? net.getListP().length : starts.length;
+            for (int i = 0; i < count; i++) trace.write("," + group + i);
         }
         trace.newLine();
     }
 
-    private void initializeSimulation() {
-        checkInvariants();
-        simulator.setSimulationTime(config.horizon());
-        simulator.setTimeCurr(0);
-        simulator.input();
-        if (simulator.getTimeMin() > 0) {
-            recordSettledState(0);
-        }
-    }
-
-    private void processEvents() {
-        double current = 0;
-        int microsteps = 0;
-        while (true) {
-            double next = simulator.getTimeMin();
-            if (next == Double.MAX_VALUE || next > config.horizon()) {
-                break;
-            }
-            require(next >= current, "time reversed");
-            if (next == current) {
-                if (++microsteps > 100_000) {
-                    throw new IllegalStateException("Nonterminating zero-time closure");
-                }
-            } else {
-                microsteps = 0;
-            }
-            integrate(current, next);
-            current = next;
-            simulator.setTimeCurr(current);
-            simulator.output();
-            simulator.input();
-            if (simulator.getTimeMin() > current) {
-                recordSettledState(current);
-            }
-        }
-        integrate(current, config.horizon());
-        simulator.setTimeCurr(config.horizon());
-        checkInvariants();
-        if (sampleEvery > 0 && (trajectory.isEmpty()
-                || trajectory.getLast().time() != config.horizon())) {
-            sampleTrajectory(config.horizon());
-        }
-    }
-
-    private Result createResult() {
-        int[] marks = new int[placeAreas.length];
-        int[] buffers = new int[bufferAreas.length];
-        for (int index = 0; index < marks.length; index++) {
-            marks[index] = mark(index);
-        }
-        for (int index = 0; index < buffers.length; index++) {
-            buffers[index] = active(index);
-        }
-        return new Result(config, starts.clone(), ends.clone(), windowEnds.clone(), marks, buffers,
-            placeAreas.clone(), bufferAreas.clone(), fullQueueMax, invariantChecks,
-            B2NetFactory.delayDescription(net), capacity, placeMaxima.clone(), List.copyOf(trajectory));
-    }
-
     private static void require(boolean condition, String message) {
-        if (!condition) {
-            throw new IllegalStateException("B2 invariant failed: "+message);
-        }
+        if (!condition) throw new IllegalStateException("B2 check failed: " + message);
     }
 }

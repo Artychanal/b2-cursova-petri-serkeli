@@ -28,9 +28,6 @@ public final class B2NetFactory {
     static final int T5_ENQUEUE = 5;
     static final int T6_PRIMARY_BUFFERED = 6;
 
-    private enum Variant {
-        BASELINE, BUFFERED
-    }
     private static final int[] BASELINE_TRANSITIONS = {
         T0_ARRIVAL, T1_PRIMARY_DIRECT, T2_REFUSAL, T3_SECONDARY, T4_FULL
     };
@@ -43,7 +40,7 @@ public final class B2NetFactory {
 
     public static PetriNet baseline(ModelConfig config, DelaySource delays)
     throws ExceptionInvalidTimeDelay {
-        return create(config, delays, Variant.BASELINE, 0);
+        return create(config, delays, baselineSpec(), 0);
     }
 
     public static PetriNet buffered(ModelConfig config, DelaySource delays, int capacity)
@@ -51,40 +48,62 @@ public final class B2NetFactory {
         if (capacity < 0) {
             throw new IllegalArgumentException("K must be nonnegative");
         }
-        return create(config, delays, Variant.BUFFERED, capacity);
+        return create(config, delays, bufferedSpec(capacity), capacity);
+    }
+
+    private record PlaceSpec(String name, int initialMark) {
+    }
+
+    private record NetworkSpec(String name, String variant, int primaryTransition,
+            PlaceSpec[] places, int[] transitionIds, ArcSpec[] inputs, ArcSpec[] outputs) {
+    }
+
+    private static PlaceSpec[] baselinePlaces() {
+        return new PlaceSpec[]{
+            new PlaceSpec("generator_permission", 1),
+            new PlaceSpec("arrived_pending_decision", 0),
+            new PlaceSpec("primary_free", 1),
+            new PlaceSpec("Q_secondary", 0),
+            new PlaceSpec("secondary_free", 1),
+            new PlaceSpec("Q_full", 0),
+            new PlaceSpec("full_free", 1),
+            new PlaceSpec("completed_secondary", 0),
+            new PlaceSpec("completed_full", 0)
+        };
+    }
+
+    private static NetworkSpec baselineSpec() {
+        return new NetworkSpec("B2_N0", "baseline", T1_PRIMARY_DIRECT,
+                baselinePlaces(), BASELINE_TRANSITIONS, baselineInputs(), baselineOutputs());
+    }
+
+    private static NetworkSpec bufferedSpec(int capacity) {
+        var places = new ArrayList<PlaceSpec>(java.util.Arrays.asList(baselinePlaces()));
+        places.add(new PlaceSpec("Q_in", 0));
+        places.add(new PlaceSpec("primary_free_capacity", Math.addExact(capacity, 1)));
+        return new NetworkSpec("B2_NK", "buffered", T6_PRIMARY_BUFFERED,
+                places.toArray(PlaceSpec[]::new), BUFFERED_TRANSITIONS,
+                bufferedInputs(), bufferedOutputs());
     }
 
     private static PetriNet create(ModelConfig config, DelaySource delays,
-        Variant variant, int capacity)
-    throws ExceptionInvalidTimeDelay {
-        var places = createPlaces(variant, capacity);
-        int[] transitionIds = transitionIds(variant);
+            NetworkSpec spec, int capacity) throws ExceptionInvalidTimeDelay {
+        var places = createPlaces(spec.places());
+        int[] transitionIds = spec.transitionIds();
         var transitions = createTransitions(config, delays, transitionIds);
-        var inputs = connectInputs(places, transitions, variant, transitionIds);
-        var outputs = connectOutputs(places, transitions, variant, transitionIds);
-        var net = new PetriNet(networkName(variant), places, transitions, inputs, outputs);
+        var inputs = connectInputs(places, transitions, spec.inputs(), transitionIds);
+        var outputs = connectOutputs(places, transitions, spec.outputs(), transitionIds);
+        var layout = new Layout(transitionIds.clone(), capacity,
+                spec.primaryTransition(), spec.variant());
+        var net = new ModelNet(spec.name(), places, transitions, inputs, outputs, layout);
         net.validateStructure();
         return net;
     }
 
-    private static ArrayList<PetriP> createPlaces(Variant variant, int capacity) {
-        String[] names = {
-            "generator_permission", "arrived_pending_decision", "primary_free",
-            "Q_secondary", "secondary_free", "Q_full", "full_free",
-            "completed_secondary", "completed_full"
-        };
-        int[] initialMarks = {
-            1, 0, 1, 0, 1, 0, 1, 0, 0
-        };
+    private static ArrayList<PetriP> createPlaces(PlaceSpec[] specs) {
         var places = new ArrayList<PetriP>();
-        for (int index = 0; index < names.length; index++) {
-            addPlace(places, names[index], initialMarks[index]);
-        }
-        if (variant != Variant.BASELINE) {
-            addPlace(places, "Q_in", 0);
-        }
-        if (variant == Variant.BUFFERED) {
-            addPlace(places, "primary_free_capacity", Math.addExact(capacity, 1));
+        for (PlaceSpec spec : specs) {
+            addPlace(places, spec.name(), spec.initialMark());
         }
         return places;
     }
@@ -106,7 +125,7 @@ public final class B2NetFactory {
             config.fullMean(), 0, config.primaryMean()
         };
         int[] priorities = {
-            0, 30, 10, 0, 0, 20, 30
+            0, 3, 1, 0, 0, 2, 3
         };
         var transitions = new ArrayList<PetriT>();
         for (int index = 0; index < transitionIds.length; index++) {
@@ -129,19 +148,20 @@ public final class B2NetFactory {
     private record ArcSpec(int transition, int place, int weight) {
     }
 
-    private static ArcSpec[] inputArcs(Variant variant) {
-        if (variant == Variant.BASELINE) {
-            return new ArcSpec[]{
-                new ArcSpec(T0_ARRIVAL, P0_GENERATOR, 1),
-                new ArcSpec(T1_PRIMARY_DIRECT, P1_ARRIVAL_PENDING, 2),
-                new ArcSpec(T1_PRIMARY_DIRECT, P2_PRIMARY_FREE, 1),
-                new ArcSpec(T2_REFUSAL, P1_ARRIVAL_PENDING, 2),
-                new ArcSpec(T3_SECONDARY, P3_SECONDARY_QUEUE, 2),
-                new ArcSpec(T3_SECONDARY, P4_SECONDARY_FREE, 1),
-                new ArcSpec(T4_FULL, P5_FULL_QUEUE, 1),
-                new ArcSpec(T4_FULL, P6_FULL_FREE, 1)
-            };
-        }
+    private static ArcSpec[] baselineInputs() {
+        return new ArcSpec[]{
+            new ArcSpec(T0_ARRIVAL, P0_GENERATOR, 1),
+            new ArcSpec(T1_PRIMARY_DIRECT, P1_ARRIVAL_PENDING, 2),
+            new ArcSpec(T1_PRIMARY_DIRECT, P2_PRIMARY_FREE, 1),
+            new ArcSpec(T2_REFUSAL, P1_ARRIVAL_PENDING, 2),
+            new ArcSpec(T3_SECONDARY, P3_SECONDARY_QUEUE, 2),
+            new ArcSpec(T3_SECONDARY, P4_SECONDARY_FREE, 1),
+            new ArcSpec(T4_FULL, P5_FULL_QUEUE, 1),
+            new ArcSpec(T4_FULL, P6_FULL_FREE, 1)
+        };
+    }
+
+    private static ArcSpec[] bufferedInputs() {
         return new ArcSpec[]{
             new ArcSpec(T0_ARRIVAL, P0_GENERATOR, 1),
             new ArcSpec(T2_REFUSAL, P1_ARRIVAL_PENDING, 2),
@@ -156,20 +176,21 @@ public final class B2NetFactory {
         };
     }
 
-    private static ArcSpec[] outputArcs(Variant variant) {
-        if (variant == Variant.BASELINE) {
-            return new ArcSpec[]{
-                new ArcSpec(T0_ARRIVAL, P0_GENERATOR, 1),
-                new ArcSpec(T0_ARRIVAL, P1_ARRIVAL_PENDING, 2),
-                new ArcSpec(T1_PRIMARY_DIRECT, P2_PRIMARY_FREE, 1),
-                new ArcSpec(T1_PRIMARY_DIRECT, P3_SECONDARY_QUEUE, 2),
-                new ArcSpec(T2_REFUSAL, P5_FULL_QUEUE, 2),
-                new ArcSpec(T3_SECONDARY, P4_SECONDARY_FREE, 1),
-                new ArcSpec(T3_SECONDARY, P7_SECONDARY_DONE, 2),
-                new ArcSpec(T4_FULL, P6_FULL_FREE, 1),
-                new ArcSpec(T4_FULL, P8_FULL_DONE, 1)
-            };
-        }
+    private static ArcSpec[] baselineOutputs() {
+        return new ArcSpec[]{
+            new ArcSpec(T0_ARRIVAL, P0_GENERATOR, 1),
+            new ArcSpec(T0_ARRIVAL, P1_ARRIVAL_PENDING, 2),
+            new ArcSpec(T1_PRIMARY_DIRECT, P2_PRIMARY_FREE, 1),
+            new ArcSpec(T1_PRIMARY_DIRECT, P3_SECONDARY_QUEUE, 2),
+            new ArcSpec(T2_REFUSAL, P5_FULL_QUEUE, 2),
+            new ArcSpec(T3_SECONDARY, P4_SECONDARY_FREE, 1),
+            new ArcSpec(T3_SECONDARY, P7_SECONDARY_DONE, 2),
+            new ArcSpec(T4_FULL, P6_FULL_FREE, 1),
+            new ArcSpec(T4_FULL, P8_FULL_DONE, 1)
+        };
+    }
+
+    private static ArcSpec[] bufferedOutputs() {
         return new ArcSpec[]{
             new ArcSpec(T0_ARRIVAL, P0_GENERATOR, 1),
                 new ArcSpec(T0_ARRIVAL, P1_ARRIVAL_PENDING, 2),
@@ -186,9 +207,9 @@ public final class B2NetFactory {
     }
 
     private static ArrayList<ArcIn> connectInputs(List<PetriP> places,
-            List<PetriT> transitions, Variant variant, int[] transitionIds) {
+            List<PetriT> transitions, ArcSpec[] arcs, int[] transitionIds) {
         var inputs = new ArrayList<ArcIn>();
-        for (ArcSpec arc : inputArcs(variant)) {
+        for (ArcSpec arc : arcs) {
             int index = indexOf(transitionIds, arc.transition());
             inputs.add(new ArcIn(places.get(arc.place()), transitions.get(index), arc.weight()));
         }
@@ -196,46 +217,56 @@ public final class B2NetFactory {
     }
 
     private static ArrayList<ArcOut> connectOutputs(List<PetriP> places,
-            List<PetriT> transitions, Variant variant, int[] transitionIds) {
+            List<PetriT> transitions, ArcSpec[] arcs, int[] transitionIds) {
         var outputs = new ArrayList<ArcOut>();
-        for (ArcSpec arc : outputArcs(variant)) {
+        for (ArcSpec arc : arcs) {
             int index = indexOf(transitionIds, arc.transition());
             outputs.add(new ArcOut(transitions.get(index), places.get(arc.place()), arc.weight()));
         }
         return outputs;
     }
 
-    private static Variant variantOf(PetriNet net) {
-        return switch (net.getListP().length) {
-            case 9 -> Variant.BASELINE;
+    public record Layout(int[] transitionIds, int capacity, int primaryTransition,
+            String variant, int[] indices, int counterCount) {
+        Layout(int[] transitionIds, int capacity, int primaryTransition, String variant) {
+            this(transitionIds, capacity, primaryTransition, variant,
+                    indicesOf(transitionIds), java.util.Arrays.stream(transitionIds).max().orElseThrow() + 1);
+        }
 
-            case 11 -> Variant.BUFFERED;
-            default -> throw new IllegalArgumentException("Unknown B2 variant");
-        };
+        public int indexOf(int logicalId) {
+            return logicalId >= 0 && logicalId < indices.length ? indices[logicalId] : -1;
+        }
     }
 
-    private static int[] transitionIds(Variant variant) {
-        return switch (variant) {
-            case BASELINE -> BASELINE_TRANSITIONS;
-            case BUFFERED -> BUFFERED_TRANSITIONS;
-
-        };
+    private static int[] indicesOf(int[] ids) {
+        int size = java.util.Arrays.stream(ids).max().orElseThrow() + 1;
+        int[] indices = new int[size];
+        java.util.Arrays.fill(indices, -1);
+        for (int i = 0; i < ids.length; i++) indices[ids[i]] = i;
+        return indices;
     }
 
-    private static String networkName(Variant variant) {
-        return switch (variant) {
-            case BASELINE -> "B2_N0";
-            case BUFFERED -> "B2_NK";
+    private static final class ModelNet extends PetriNet {
+        final Layout layout;
+        ModelNet(String name, ArrayList<PetriP> places, ArrayList<PetriT> transitions,
+                ArrayList<ArcIn> inputs, ArrayList<ArcOut> outputs, Layout layout)
+                throws ExceptionInvalidTimeDelay {
+            super(name, places, transitions, inputs, outputs);
+            this.layout = layout;
+        }
+    }
 
-        };
+    public static Layout layout(PetriNet net) {
+        if (net instanceof ModelNet model) return model.layout;
+        throw new IllegalArgumentException("Use a network created by B2NetFactory");
     }
 
     public static int logicalId(PetriNet net, int index) {
-        return transitionIds(variantOf(net))[index];
+        return layout(net).transitionIds()[index];
     }
 
     public static int denseIndex(PetriNet net, int logicalId) {
-        return indexOf(transitionIds(variantOf(net)), logicalId);
+        return layout(net).indexOf(logicalId);
     }
 
     private static int indexOf(int[] ids, int logicalId) {
@@ -249,6 +280,10 @@ public final class B2NetFactory {
 
     /** Знімок структури мережі. */
     public static Map<String, Object> structure(PetriNet net) {
+        return structure(net, layout(net));
+    }
+
+    public static Map<String, Object> structure(PetriNet net, Layout layout) {
         var places = new ArrayList<Object>();
         for (PetriP place : net.getListP()) {
             places.add(Map.of("id", "P" + place.getNumber(),
@@ -256,29 +291,17 @@ public final class B2NetFactory {
         }
         var transitions = new ArrayList<Object>();
         for (PetriT transition : net.getListT()) {
-            transitions.add(describeTransition(net, transition));
-        }
-        Variant variant = variantOf(net);
-        String variantName = switch (variant) {
-            case BASELINE -> "baseline";
-            case BUFFERED -> "buffered";
-
-        };
-        Integer capacity = null;
-        if (variant == Variant.BASELINE) {
-            capacity = 0;
-        } else if (variant == Variant.BUFFERED) {
-            capacity = net.getListP()[10].getMark() - 1;
+            transitions.add(describeTransition(net, transition, layout));
         }
         var snapshot = new LinkedHashMap<String, Object>();
-        snapshot.put("variant", variantName);
-        snapshot.put("capacity", capacity);
+        snapshot.put("variant", layout.variant());
+        snapshot.put("capacity", layout.capacity());
         snapshot.put("places", places);
         snapshot.put("transitions", transitions);
         return snapshot;
     }
 
-    private static Map<String, Object> describeTransition(PetriNet net, PetriT transition) {
+    private static Map<String, Object> describeTransition(PetriNet net, PetriT transition, Layout layout) {
         var inputs = new LinkedHashMap<String, Integer>();
         for (ArcIn arc : net.getArcIn()) {
             if (arc.getNumT() == transition.getNumber()) {
@@ -302,7 +325,7 @@ public final class B2NetFactory {
             ? Map.of("kind", "constant", "value", transition.getParameter())
             : Map.of("kind", transition.getDistribution(), "mean", transition.getParameter());
         var description = new LinkedHashMap<String, Object>();
-        description.put("id", "T" + logicalId(net, transition.getNumber()));
+        description.put("id", "T" + layout.transitionIds()[transition.getNumber()]);
         description.put("name", transition.getName());
         description.put("inputs", inputs);
         description.put("outputs", outputs);

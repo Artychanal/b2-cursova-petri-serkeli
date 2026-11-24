@@ -73,17 +73,17 @@ public final class VerificationMain {
         var transitions = List.of(
             transition("T0", "arrival", 30.0, 0,
                 Map.of("P0", 1), Map.of("P0", 1, "P1", 2)),
-            transition("T1", "primary_direct", 30.0, 30,
+            transition("T1", "primary_direct", 30.0, 3,
                 Map.of("P1", 2, "P2", 1), Map.of("P2", 1, "P3", 2)),
-            transition("T2", "primary_refusal", 0.0, 10,
+            transition("T2", "primary_refusal", 0.0, 1,
                 Map.of("P1", 2), Map.of("P5", 2)),
             transition("T3", "secondary", 30.0, 0,
                 Map.of("P3", 2, "P4", 1), Map.of("P4", 1, "P7", 2)),
             transition("T4", "full", 100.0, 0,
                 Map.of("P5", 1, "P6", 1), Map.of("P6", 1, "P8", 1)),
-            transition("T5", "enqueue", 0.0, 20,
+            transition("T5", "enqueue", 0.0, 2,
                 Map.of("P1", 2, "P10", 1), Map.of("P9", 1)),
-            transition("T6", "primary", 30.0, 30,
+            transition("T6", "primary", 30.0, 3,
                 Map.of("P2", 1, "P9", 1), Map.of("P10", 1, "P2", 1, "P3", 2))
         );
         var expectedPlaces = buffered ? places : places.subList(0, 9);
@@ -98,6 +98,30 @@ public final class VerificationMain {
         require(expectedTransitions.equals(actual.get("transitions")), "Transitions differ from section 2");
     }
 
+    private static void replaySavedRuns() throws Exception {
+        Path csv = Path.of("data/main/capacity-S-v2/K18_H10000000_A2000000_R2109_S400000000/replications.csv");
+        if (!Files.exists(csv)) throw new IllegalStateException("Saved main series is required");
+        var rows = Files.readAllLines(csv);
+        String[] names = rows.getFirst().split(",");
+        for (int index : new int[]{0, 1054, 2108}) {
+            String[] cells = rows.get(index + 1).split(",");
+            long seed = Long.parseLong(cells[1]);
+            var config = ModelConfig.baseline(10_000_000, seed, 2_000_000);
+            var result = new SimulationRunner(B2NetFactory.buffered(config,
+                    DelaySource.seeded(seed), 18), config).run(null);
+            require(result.arrivedPairsInWindow() == Long.parseLong(cells[2]), "replayed arrivals");
+            require(result.refusedPairsInWindow() == Long.parseLong(cells[3]), "replayed refusals");
+            var actual = result.summary();
+            for (int column = 4; column < names.length; column++) {
+                double expected = Double.parseDouble(cells[column]);
+                double value = ((Number) actual.get(names[column])).doubleValue();
+                require(Double.doubleToLongBits(expected) == Double.doubleToLongBits(value),
+                        "replayed " + names[column]);
+            }
+        }
+        System.out.println("Historical full-model replay: 3/3 runs, all saved metrics match exactly");
+    }
+
     public static void main(String[] args) throws Exception {
         Path output = Path.of("output");
         checks = 0;
@@ -107,9 +131,12 @@ public final class VerificationMain {
         System.out.println("Formal structure: N0, NK (K=0) and NK (K=18) match");
         Verification.execute(output);
         BufferVerification.execute(output);
+        AlgorithmVerification.main(new String[0]);
+        InputVerification.main(new String[0]);
         ResultProcessing.verify();
         checks = 0;
         fractionalSamples();
         System.out.println("Fractional time checks: " + checks);
+        if (args.length > 0 && args[0].equals("replay")) replaySavedRuns();
     }
 }

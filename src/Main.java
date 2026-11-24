@@ -13,6 +13,8 @@ public final class Main {
                 demo(output);
                 bufferDemo(output);
             }
+            case "verify" -> VerificationMain.main(java.util.Arrays.copyOfRange(args, 1, args.length));
+            case "inputs" -> InputVerification.main(new String[0]);
             case "main-series" -> MainExperiments.execute(output, Path.of(args.length>1?args[1]:"data/main-series-K18.properties"));
             case "demo" -> demo(output);
             case "buffer-demo" -> bufferDemo(output);

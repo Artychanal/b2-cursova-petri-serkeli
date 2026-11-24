@@ -6,7 +6,6 @@ import java.util.*;
 public final class ResultProcessing {
     private static final Path FACTOR = Path.of("output/factor-capacity");
     private static final Path MAIN = Path.of("main/capacity-S-v2/K18_H10000000_A2000000_R2109_S400000000/replications.csv");
-    private static final int REPETITIONS = 5000;
     private static final List<Path> INPUTS = new ArrayList<>();
 
     public static void main(String[] args) throws Exception {
@@ -18,25 +17,13 @@ public final class ResultProcessing {
         processFactorStudy(input);
         processMainStudy(input);
         saveProvenance();
-        System.out.println("Saved Java statistics, bootstrap intervals and plot coordinates");
+        System.out.println("Saved replication estimates and capacity analysis");
     }
 
     private static void processFactorStudy(Path input) throws Exception {
         Path factor = input.resolve("factor-capacity");
-        var analysis = StudyStatistics.analyze(factor.resolve("main.csv"), input.resolve(MAIN));
-        var diagnostics = asObjectRows(analysis.get("mainNormality"));
-        double[] probabilities = new double[diagnostics.size()];
-        for (int index = 0; index < probabilities.length; index++) {
-            var test = asObjectMap(diagnostics.get(index).get("normality"));
-            probabilities[index] = asDouble(test.get("p"));
-        }
-        analysis.put("mainNormalityHolm", BootstrapStatistics.holm(probabilities));
+        var analysis = StudyStatistics.analyze(factor.resolve("main.csv"));
         var factors = asObjectRows(analysis.get("factorAnalysis"));
-        double refusalP = asDouble(asObjectMap(factors.get(0).get("classical")).get("p"));
-        double inputQueueP = asDouble(asObjectMap(factors.get(1).get("welch")).get("p"));
-        analysis.put("factorHolm", BootstrapStatistics.holm(new double[]{
-                refusalP, inputQueueP
-        }));
         analysis.put("pilotPlanning", planFactorReplications(factor));
         var expanded = expandedCapacityStudy(factors, input.resolve("capacity-extension"));
         analysis.put("expandedCapacityStudy", expanded);
@@ -144,7 +131,7 @@ public final class ResultProcessing {
             hashes.put(path.toString(), HexFormat.of().formatHex(digest));
         }
         var sources = new LinkedHashMap<String, String>();
-        for (String name : List.of("ResultProcessing", "BootstrapStatistics", "StudyStatistics", "CapacityExtensionStudy")) {
+        for (String name : List.of("ResultProcessing", "StudyStatistics", "CapacityExtensionStudy")) {
             sources.put(name, Files.readString(Path.of("src", name + ".java")));
         }
         Json.write(Path.of("output/java-statistics-provenance.json"), Map.of(
@@ -152,132 +139,34 @@ public final class ResultProcessing {
             "sources", sources,
             "javaVersion", System.getProperty("java.version"),
             "rng", "java.util.Random",
-            "bootstrapReplications", REPETITIONS,
             "model", RunProvenance.collect()));
     }
 
     private static void processMainStudy(Path input) throws Exception {
         var rows = readSamples(input.resolve(MAIN));
-        double[] arrivals = valuesOf(rows, "arrived_pairs"), refusals = valuesOf(rows, "refused_pairs");
-        var metrics = new LinkedHashMap<String, double[]>();
-        for (String name:List.of("L_full", "L_secondary", "L_in", "U_primary", "U_secondary", "U_full", "throughput", "Q_full_end")){
-            metrics.put(name, valuesOf(rows, name));
+        Properties plan = new Properties();
+        try (var reader = Files.newBufferedReader(input.resolve("main-series-K18.properties"))) {
+            plan.load(reader);
         }
-        var intervals = BootstrapStatistics.jointIntervals(metrics, arrivals, refusals, REPETITIONS, 830000000L);
-        var distances = new LinkedHashMap<String, Double>();
-        intervals.forEach((name, ci) -> {
-                double mean = name.equals("pRefusal")
-                    ? Arrays.stream(refusals).sum() / Arrays.stream(arrivals).sum()
-                    : ExperimentStatistics.mean(metrics.get(name));
-                distances.put(name, Math.max(mean-ci[0], ci[1]-mean));
-        });
-        Json.write(FACTOR.resolve("bootstrap.json"), Map.of("replications", REPETITIONS, "seed", 830000000L,                 "rng", "java.util.Random", "method", "percentile resampling of whole independent runs", "intervals", intervals, "maxDistance", distances));
-        double ratio = Arrays.stream(refusals).sum()/Arrays.stream(arrivals).sum(), meanArrivals = ExperimentStatistics.mean(arrivals);
-        double[] influences = new double[rows.size()];
-        for (int i = 0;i<influences.length;i++){
-            influences[i] = 100*(refusals[i]-ratio*arrivals[i])/meanArrivals;
+        var estimates = new LinkedHashMap<String, Object>();
+        estimates.put("pRefusal", ExperimentStatistics.refusal(valuesOf(rows, "arrived_pairs"),
+                valuesOf(rows, "refused_pairs")).json());
+        for (String name : List.of("L_full", "L_secondary", "L_in", "U_primary",
+                "U_secondary", "U_full", "throughput", "Q_full_end")) {
+            estimates.put(name, ExperimentStatistics.meanEstimate(name, valuesOf(rows, name),
+                    Double.parseDouble(plan.getProperty("epsilon." + name))).json());
         }
-        var mainPanels = new LinkedHashMap<String, Object>();
-        mainPanels.put("pRefusalInfluence", histogramData(influences));
-        for (String name:List.of("L_full", "L_secondary", "Q_full_end")){
-            mainPanels.put(name, histogramData(metrics.get(name)));
-        }
-        var factorPanels = new LinkedHashMap<String, Object>();
-        var factor = readSamples(input.resolve("factor-capacity/main.csv"));
-        for (int k:new int[]{
-                5, 18, 38
-        }){
-            for (String name:List.of("pRefusal", "L_in")) {
-                double scale = name.equals("pRefusal")?100:1;
-                double[] sample = factor.stream().filter(row -> row.get("K") == k).mapToDouble(row -> row.get(name)*scale).toArray();
-                factorPanels.put(k+"_"+name, histogramData(sample));
-            }
-        }
-        Json.write(FACTOR.resolve("plot-data.json"), Map.of("main", mainPanels, "factor", factorPanels));
-    }
-
-    private static Map<String, Object> histogramData(double[] values) {
-        double[] sorted = values.clone();
-        Arrays.sort(sorted);
-        int n = sorted.length;
-        double mean = ExperimentStatistics.mean(values), sd = Math.sqrt(ExperimentStatistics.variance(values));
-        double width = 2*(BootstrapStatistics.quantile(sorted, .75)-BootstrapStatistics.quantile(sorted, .25))/Math.cbrt(n);
-        if (width <= 0){
-            width = 3.5*sd/Math.cbrt(n);
-        }
-        int bins = width>0?Math.max(1, (int)Math.ceil((sorted[n-1]-sorted[0])/width)):1;
-        double low = sorted[0], high = sorted[n-1];
-        if (high == low) {
-            low-=.5;
-            high+=.5;
-        }
-        double step = (high-low)/bins;
-        double[] edges = new double[bins+1], density = new double[bins];
-        for (int i = 0;i <= bins;i++){
-            edges[i] = low+i*step;
-        }
-        for (double v:values){
-            density[Math.min(bins-1, (int)((v-low)/step))]+=1.0/(n*step);
-        }
-        double[] x = new double[200], y = new double[200];
-        double left = Math.min(low, mean-3*sd), right = Math.max(high, mean+3*sd);
-        for (int i = 0;i<x.length;i++) {
-            x[i] = left+(right-left)*i/(x.length-1);
-            y[i] = sd>0?Math.exp(-.5*Math.pow((x[i]-mean)/sd, 2))/(sd*Math.sqrt(2*Math.PI)):0;
-        }
-        return Map.of("edges", edges, "density", density, "normalX", x, "normalY", y);
+        Json.write(Path.of("output/main-estimates.json"), estimates);
     }
 
     static void verify() {
-        require(BootstrapStatistics.quantile(new double[]{
-                0, 10, 20, 30
-        }, .25) == 7.5, "linear quantile");
-        require(BootstrapStatistics.quantile(new double[]{
-                7
-        }, .95) == 7, "singleton quantile");
-        require(Arrays.equals(BootstrapStatistics.meanInterval(new double[]{
-                7, 7, 7
-        }, 100, new Random(1)), new double[]{
-                7, 7
-        }), "constant mean interval");
-        require(BootstrapStatistics.ratio(new double[]{
-                10, 20
-        }, new double[]{
-                1, 10
-        }, new int[]{
-                0, 1
-        }) == 11.0/30, "ratio of sums");
-        require(BootstrapStatistics.ratio(new double[]{
-                10, 20
-        }, new double[]{
-                1, 10
-        }, new int[]{
-                1, 1
-        }) == .5, "paired resampling");
-        double[] a = BootstrapStatistics.meanInterval(new double[]{
-                1, 2, 5
-        }, 100, new Random(17));
-        require(Arrays.equals(a, BootstrapStatistics.meanInterval(new double[]{
-                1, 2, 5
-        }, 100, new Random(17))), "seed reproducibility");
-        require(Arrays.equals(BootstrapStatistics.holm(new double[]{
-                    .01, .04, .03
-        }), new double[]{
-                    .03, .06, .06
-        }), "Holm correction");
-        var joint = BootstrapStatistics.jointIntervals(Map.of("constant", new double[]{
-                7, 7
-        }), new double[]{
-                10, 10
-        }, new double[]{
-                2, 2
-        }, 100, 4);
-        require(Arrays.equals(joint.get("pRefusal"), new double[]{
-                    .2, .2
-        }) && Arrays.equals(joint.get("constant"), new double[]{
-                7, 7
-        }), "constant joint intervals");
-        System.out.println("Java postprocessing verification: 8/8");
+        var analysis = StudyStatistics.classical(List.of(new double[]{1, 2, 3}, new double[]{4, 5, 6}));
+        require(Math.abs(asDouble(analysis.get("SS_between")) - 13.5) < 1e-12, "factor sum");
+        require(Math.abs(asDouble(analysis.get("SS_within")) - 4) < 1e-12, "residual sum");
+        require(Math.abs(asDouble(analysis.get("F")) - 13.5) < 1e-12, "F statistic");
+        require(ExperimentStatistics.mean(new double[]{2, 4, 6}) == 4, "mean");
+        require(ExperimentStatistics.variance(new double[]{2, 4, 6}) == 4, "sample variance");
+        System.out.println("Statistical checks: 5/5 passed");
     }
 
     private static void require(boolean value, String message) {

@@ -39,7 +39,7 @@ public final class MainExperiments {
             throw new IllegalArgumentException("Main series smaller than frozen pilot plan");
         }
         if (Double.parseDouble(plan.getProperty("epsilon.pRefusal")) != 0.005) {
-            throw new IllegalArgumentException("Ratio estimator uses epsilon.pRefusal=0.005");
+            throw new IllegalArgumentException("Refusal precision must be epsilon.pRefusal=0.005");
         }
         String pilotPath = plan.getProperty("pilot_design");
         String pilotHash = HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(Path.of(pilotPath))));

@@ -80,27 +80,14 @@ public final class ExperimentStatistics {
         if (arrivals.length != refusals.length || arrivals.length < 2) {
             throw new IllegalArgumentException("Mismatched counts");
         }
-        double meanArrivals = mean(arrivals);
-        if (meanArrivals <= 0) {
-            throw new IllegalArgumentException("No arrivals");
-        }
-        double refusalRate = mean(refusals) / meanArrivals;
-        double epsilon = 0.005;
-        double[] residuals = new double[arrivals.length];
-        double[] influences = new double[arrivals.length];
+        double[] rates = new double[arrivals.length];
         for (int index = 0; index < arrivals.length; index++) {
-            residuals[index] = refusals[index] - refusalRate * arrivals[index];
-            influences[index] = residuals[index] / meanArrivals;
+            if (arrivals[index] <= 0 || refusals[index] < 0 || refusals[index] > arrivals[index]) {
+                throw new IllegalArgumentException("Invalid arrival or refusal count");
+            }
+            rates[index] = refusals[index] / arrivals[index];
         }
-        double standardDeviation = Math.sqrt(variance(influences));
-        double halfWidth = confidenceHalfWidth(arrivals.length, standardDeviation);
-        // Оцінка випадкового знаменника.
-        double conservativeCount = 4 * (variance(arrivals) + variance(residuals) / (epsilon * epsilon))
-        / ((1 - BETA) * meanArrivals * meanArrivals);
-        return new Estimate("pRefusal", arrivals.length, refusalRate, standardDeviation, epsilon,
-            Math.max(0, refusalRate - halfWidth), Math.min(1, refusalRate + halfWidth),
-            halfWidth, required(conservativeCount),
-            "ratio of mean counts; Student-t delta interval; pilot plug-in Chebyshev ratio bound");
+        return meanEstimate("pRefusal", rates, .005);
     }
 
     private static double confidenceHalfWidth(int sampleSize, double standardDeviation) {

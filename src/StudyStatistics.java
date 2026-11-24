@@ -1,106 +1,94 @@
 import java.nio.file.*;
 import java.util.*;
 import org.apache.commons.math3.distribution.NormalDistribution;
+import org.apache.commons.math3.distribution.ChiSquaredDistribution;
 import org.apache.commons.math3.distribution.FDistribution;
 import org.apache.commons.math3.special.Beta;
 import org.apache.commons.math3.stat.inference.OneWayAnova;
 
-/** Статистичні перевірки вибірок. */
+/** Однофакторний дисперсійний аналіз. */
 public final class StudyStatistics {
-    private static final int NORMAL_BOOTSTRAPS = 1999;
-    private static final int BINS = 8;
-    private static final double[] CUTS = new double[BINS - 1];
-    static {
-        var normal = new NormalDistribution();
-        for (int j = 1; j < BINS; j++) {
-            CUTS[j - 1] = normal.inverseCumulativeProbability((double) j / BINS);
-        }
-    }
+    private StudyStatistics() { }
 
-    public static Map<String, Object> analyze(Path factorCsv, Path mainCsv) throws Exception {
-        var factor = read(factorCsv);
-        var results = new LinkedHashMap<String, Object>();
-        var factors = new ArrayList<Object>();
+    public static Map<String, Object> analyze(Path factorCsv) throws Exception {
+        var rows = read(factorCsv);
+        var analyses = new ArrayList<Object>();
         for (String metric : List.of("pRefusal", "L_in")) {
             var groups = new ArrayList<double[]>();
             var estimates = new ArrayList<Object>();
-            for (int k : new int[]{
-                    5, 18, 38
-            }) {
-                double[] values = factor.stream().filter(row -> row.get("K") == k)
-                    .mapToDouble(row -> row.get(metric)).toArray();
-                if (values.length != 40) {
-                    throw new IllegalArgumentException("Expected 40 runs per level");
-                }
+            boolean normalGroups = true;
+            for (int capacity : new int[]{5, 18, 38}) {
+                double[] values = rows.stream().filter(row -> row.get("K") == capacity)
+                        .mapToDouble(row -> row.get(metric)).toArray();
+                if (values.length != 40) throw new IllegalArgumentException("Expected 40 runs per level");
                 groups.add(values);
                 var estimate = new LinkedHashMap<String, Object>();
-                estimate.put("K", k);
+                estimate.put("K", capacity);
                 estimate.put("estimate", ExperimentStatistics.meanEstimate(metric, values,
-                    metric.equals("pRefusal") ? 0.005 : 0.5).json());
-                estimate.put("normality", normality(values, 810_000_000L + k));
+                        metric.equals("pRefusal") ? .005 : .5).json());
+                if (metric.equals("pRefusal")) {
+                    var normality = normality(values);
+                    normalGroups &= (boolean) normality.get("passed");
+                    estimate.put("normality", normality);
+                }
                 estimates.add(estimate);
             }
             var analysis = new LinkedHashMap<String, Object>();
             analysis.put("metric", metric);
             analysis.put("groups", estimates);
-            analysis.put("welch", welch(groups));
             if (metric.equals("pRefusal")) {
+                if (!normalGroups) {
+                    throw new IllegalStateException("Normality check failed: classical ANOVA not reported");
+                }
+                var homogeneity = cochran(groups);
+                analysis.put("cochran", homogeneity);
+                if (!(boolean) homogeneity.get("passed")) {
+                    throw new IllegalStateException("Unequal variances: classical ANOVA not reported");
+                }
                 analysis.put("classical", classical(groups));
             }
-            var deviations = new ArrayList<double[]>();
-            for (double[] values : groups) {
-                double[] sorted = values.clone();
-                Arrays.sort(sorted);
-                double median = (sorted[19] + sorted[20]) / 2;
-                deviations.add(Arrays.stream(values).map(value -> Math.abs(value - median)).toArray());
-            }
-            double f = new OneWayAnova().anovaFValue(deviations);
-            analysis.put("brownForsythe", Map.of("F", f, "df1", 2, "df2", 117, "p", fTail(f, 2, 117)));
-            factors.add(analysis);
+            analyses.add(analysis);
         }
-        results.put("factorAnalysis", factors);
-        var main = read(mainCsv);
-        double arrivals = main.stream().mapToDouble(row -> row.get("arrived_pairs")).average().orElseThrow();
-        double ratio = main.stream().mapToDouble(row -> row.get("refused_pairs")).sum()
-        / main.stream().mapToDouble(row -> row.get("arrived_pairs")).sum();
-        var diagnosticRows = new ArrayList<Object>();
-        int index = 0;
-        for (String metric : List.of("pRefusalInfluence", "L_full", "L_secondary", "L_in",
-            "U_primary", "U_secondary", "U_full", "throughput", "Q_full_end")) {
-            double[] values = main.stream().mapToDouble(row -> metric.equals("pRefusalInfluence")
-                    ? (row.get("refused_pairs") - ratio * row.get("arrived_pairs")) / arrivals : row.get(metric)).toArray();
-            diagnosticRows.add(Map.of("metric", metric, "normality", normality(values, 820_000_000L + index++)));
-        }
-        results.put("mainNormality", diagnosticRows);
-        results.put("normalCalibration", Map.of("bins", BINS, "replications", NORMAL_BOOTSTRAPS,
-            "method", "Pearson statistic with fitted-normal equiprobable bins; refitted parametric Monte Carlo null"));
-        results.put("source", Files.readString(Path.of("src/StudyStatistics.java")));
-        results.put("provenance", RunProvenance.collect());
-        return results;
+        return new LinkedHashMap<>(Map.of("factorAnalysis", analyses));
     }
 
-    private static Map<String, Object> welch(List<double[]> groups) {
-        int k = groups.size();
-        double[] weights = groups.stream().mapToDouble(x -> x.length / ExperimentStatistics.variance(x)).toArray();
-        double total = Arrays.stream(weights).sum();
-        double weightedMean = 0;
-        for (int j = 0; j < k; j++) {
-            weightedMean += weights[j] * ExperimentStatistics.mean(groups.get(j)) / total;
+    public static Map<String, Object> cochran(List<double[]> groups) {
+        int count = groups.size(), df = groups.getFirst().length - 1;
+        double sum = 0, maximum = 0;
+        for (double[] values : groups) {
+            if (values.length != df + 1) throw new IllegalArgumentException("Equal group sizes required");
+            double variance = ExperimentStatistics.variance(values);
+            sum += variance;
+            maximum = Math.max(maximum, variance);
         }
-        double statistic = 0, correction = 0;
-        for (int j = 0; j < k; j++) {
-            double delta = ExperimentStatistics.mean(groups.get(j)) - weightedMean;
-            statistic += weights[j] * delta * delta / (k - 1);
-            correction += Math.pow(1 - weights[j] / total, 2) / (groups.get(j).length - 1);
-        }
-        correction /= k * k - 1;
-        statistic /= 1 + 2 * (k - 2) * correction;
-        double denominatorDf = 1 / (3 * correction);
-        return Map.of("F", statistic, "df1", k - 1, "df2", denominatorDf,
-            "p", fTail(statistic, k - 1, denominatorDf));
+        double statistic = maximum / sum;
+        double f = new FDistribution(df, (count - 1) * df)
+                .inverseCumulativeProbability(1 - .05 / count);
+        double critical = f / (f + count - 1);
+        return Map.of("G", statistic, "critical", critical, "df", df,
+                "groups", count, "passed", statistic <= critical);
     }
 
-    private static Map<String, Object> classical(List<double[]> groups) {
+    public static Map<String, Object> normality(double[] values) {
+        int bins = 8;
+        double mean = ExperimentStatistics.mean(values);
+        double sd = Math.sqrt(ExperimentStatistics.variance(values));
+        if (sd == 0) throw new IllegalArgumentException("Nonconstant sample required");
+        var normal = new NormalDistribution();
+        int[] counts = new int[bins];
+        for (double value : values) {
+            int bin = Math.min(bins - 1, (int) (bins * normal.cumulativeProbability((value - mean) / sd)));
+            counts[bin]++;
+        }
+        double expected = (double) values.length / bins, statistic = 0;
+        for (int count : counts) statistic += (count - expected) * (count - expected) / expected;
+        int df = bins - 1 - 2;
+        double critical = new ChiSquaredDistribution(df).inverseCumulativeProbability(.95);
+        return Map.of("chiSquare", statistic, "df", df, "critical", critical,
+                "counts", counts, "expected", expected, "passed", statistic <= critical);
+    }
+
+    public static Map<String, Object> classical(List<double[]> groups) {
         int n = groups.stream().mapToInt(values -> values.length).sum();
         int k = groups.size();
         double overallMean = groups.stream().flatMapToDouble(Arrays::stream).average().orElseThrow();
@@ -136,46 +124,6 @@ public final class StudyStatistics {
     private static double fTail(double value, double numeratorDf, double denominatorDf) {
         return Beta.regularizedBeta(denominatorDf / (denominatorDf + numeratorDf * value),
             denominatorDf / 2, numeratorDf / 2);
-    }
-
-    private static Map<String, Object> normality(double[] values, long seed) {
-        double observed = pearson(values);
-        var random = new Random(seed);
-        double[] simulated = new double[values.length];
-        int exceedances = 0;
-        for (int b = 0; b < NORMAL_BOOTSTRAPS; b++) {
-            for (int j = 0; j < simulated.length; j++) {
-                simulated[j] = random.nextGaussian();
-            }
-            if (pearson(simulated) >= observed - 1e-12) {
-                exceedances++;
-            }
-        }
-        return Map.of("n", values.length, "statistic", observed,
-            "p", (exceedances + 1.0) / (NORMAL_BOOTSTRAPS + 1.0), "seed", seed);
-    }
-
-    private static double pearson(double[] values) {
-        double mean = ExperimentStatistics.mean(values);
-        double sd = Math.sqrt(ExperimentStatistics.variance(values));
-        if (!(sd > 0)) {
-            throw new IllegalArgumentException("Constant normality sample");
-        }
-        int[] counts = new int[BINS];
-        for (double value : values) {
-            double z = (value - mean) / sd;
-            int cell = 0;
-            while (cell < CUTS.length && z > CUTS[cell]) {
-                cell++;
-            }
-            counts[cell]++;
-        }
-        double expected = (double) values.length / BINS;
-        double statistic = 0;
-        for (int count : counts) {
-            statistic += (count - expected) * (count - expected) / expected;
-        }
-        return statistic;
     }
 
     private static List<Map<String, Double>> read(Path path) throws Exception {
