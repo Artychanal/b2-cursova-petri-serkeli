@@ -261,14 +261,6 @@ public final class B2NetFactory {
         throw new IllegalArgumentException("Use a network created by B2NetFactory");
     }
 
-    public static int logicalId(PetriNet net, int index) {
-        return layout(net).transitionIds()[index];
-    }
-
-    public static int denseIndex(PetriNet net, int logicalId) {
-        return layout(net).indexOf(logicalId);
-    }
-
     private static int indexOf(int[] ids, int logicalId) {
         for (int index = 0; index < ids.length; index++) {
             if (ids[index] == logicalId) {
